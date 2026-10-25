@@ -13,7 +13,9 @@ Time*, by Koji Kondo) arranged with every part of the original track playable.
 
 - **Beginner mode** – the backing plays until your next note, then stops and waits. The key lights
   up with its finger number and the panel tells you the note name and where it is ("F4: 3 white keys
-  right of middle C · right hand index"). Wrong keys stay silent and flash red.
+  right of middle C · right hand index"). Wrong keys stay silent and flash red. Chords only pass when
+  every note is down at the same moment, and notes of a quarter or longer must be held for their
+  written length: let go early and the music stops until you press the note again.
 - **Play along** – the backing keeps time and you are scored: green notes hit, red notes missed.
 - **Listen** – hear every part and follow the cursor.
 - **Grand staff** – right-hand parts on the treble staff, left-hand parts on the bass staff as

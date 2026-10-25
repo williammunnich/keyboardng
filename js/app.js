@@ -64,10 +64,12 @@ const state = {
   // runtime
   playing: false,
   waiting: false,
-  pending: new Map(),   // pitch-key -> {note, part}
+  held: new Set(),      // pitches physically down right now
+  waitGroup: null,      // learn mode: the chord/note we are waiting for
+  holds: [],            // learn mode: notes that must stay down until their written end
+  holdPaused: false,    // learn mode: a held note was released early, waiting for it again
   groups: [],           // learn-mode expected groups
   groupIdx: 0,
-  earlyHits: new Set(), // `${partId}:${i}` hit before their time
   hits: 0, misses: 0, wrong: 0,
   scheduledUpTo: 0,
   curKeys: new Set(),
@@ -295,7 +297,6 @@ function play() {
   state.waiting = false;
   transport.start();
   dbg('play', { mode: state.mode, beat: +transport.now().toFixed(2), spb: +transport.spb.toFixed(4), me: meParts().map(p => p.id), back: backParts().map(p => p.id), groups: state.groups.length, groupIdx: state.groupIdx, loop: state.loop, audio: engine.ctx?.state });
-window.__trainer = { userNoteOn, userNoteOff, state, transport, play, stop, seekTo, engine, dbg, setDebug, DEBUG };
   $('btnPlay').textContent = '⏸ Pause';
   tickTimer = setInterval(tick, 25);
   requestAnimationFrame(frame);
@@ -308,6 +309,9 @@ function pause() {
   engine.stopAll();
   state.playing = false;
   state.waiting = false;
+  state.waitGroup = null;
+  state.holds = [];
+  state.holdPaused = false;
   $('btnPlay').textContent = '▶ Play';
   keyboard.setTargets([]);
   updateFrame(true);
@@ -318,7 +322,6 @@ function stop() {
   score.clearClass('hit'); score.clearClass('miss'); score.clearClass('cur');
   state.hitMarks = new Map();
   state.hits = state.misses = state.wrong = 0;
-  state.earlyHits.clear();
   updateFrame(true);
   $('targetMain').className = 'target-main';
   $('targetMain').textContent = 'Press ▶ Play to start.';
@@ -367,7 +370,14 @@ function tick() {
     scheduleBacking(state.scheduledUpTo, limit);
     state.scheduledUpTo = limit;
   }
-  // learn mode: stop at the next expected note
+  // learn mode: notes must stay down until their written end; letting go early pauses right there
+  if (state.mode === 'learn' && state.holds.length) {
+    state.holds = state.holds.filter(h => now < h.end - holdTolerance(h.note.d));
+    const hk = heldKeys();
+    const released = state.holds.filter(h => !hk.has(h.key));
+    if (released.length) { pauseForHold(released); return; }
+  }
+  // learn mode: stop at the next expected note / chord
   if (nextGroup && now >= nextGroup.t - 0.01) {
     enterWait(nextGroup);
     return;
@@ -420,28 +430,74 @@ function click(when, accent) {
   o.start(when); o.stop(when + 0.06);
 }
 
+const HOLD_MIN_BEATS = 1;                       // notes shorter than a quarter pass on press
+function holdTolerance(d) { return Math.max(0.1, d * 0.12); } // may let go slightly before the end
+function heldKeys() { const k = new Set(); for (const p of state.held) k.add(pitchKey(p)); return k; }
+function noteName(it) { return spellPitch(it.note.p, state.song.key).name; }
+
 function enterWait(group) {
   transport.pause();
   transport.beat = group.t;
-  state.pending = new Map();
-  for (const it of group.items) {
-    const k = `${it.part.id}:${it.note.i}`;
-    if (state.earlyHits.has(k)) { state.earlyHits.delete(k); markHit(it.part, it.note); continue; }
-    state.pending.set(pitchKey(it.note.p), it);
-  }
-  if (!state.pending.size) { advanceGroup(); return; }
   state.waiting = true;
-  dbg('WAIT at beat', +group.t.toFixed(2), 'for', [...state.pending.values()].map(it => `${spellPitch(it.note.p, state.song.key).name}(${it.part.id} f${it.note.f})`).join(' + '));
-  showTargets([...state.pending.values()]);
+  state.waitGroup = group;
+  dbg('WAIT at beat', +group.t.toFixed(2), 'for', group.items.map(it => `${noteName(it)}(${it.part.id} f${it.note.f} d${it.note.d})`).join(' + '));
+  if (!checkWaitSatisfied()) showTargets(group.items);
 }
 
-function advanceGroup() {
+// The group passes only when every one of its notes is down at the same moment.
+function checkWaitSatisfied() {
+  const g = state.waitGroup;
+  if (!g) return false;
+  const hk = heldKeys();
+  if (g.items.some(it => !hk.has(pitchKey(it.note.p)))) return false;
+  for (const it of g.items) {
+    markHit(it.part, it.note);
+    if (it.note.d >= HOLD_MIN_BEATS) state.holds.push({ part: it.part, note: it.note, key: pitchKey(it.note.p), end: it.note.t + it.note.d });
+  }
   state.waiting = false;
-  dbg('advance to group', state.groupIdx + 1, 'of', state.groups.length);
+  state.waitGroup = null;
   state.groupIdx++;
+  dbg('  -> PASS', g.items.map(noteName).join('+'), 'holds', state.holds.map(h => `${noteName(h)}→${h.end}`), 'next group', state.groupIdx, 'of', state.groups.length);
+  flashMain('good', g.items.map(noteName).join(' + ') + ' ✓');
   transport.start();
-window.__trainer = { userNoteOn, userNoteOff, state, transport, play, stop, seekTo, engine, dbg, setDebug, DEBUG };
   state.scheduledUpTo = transport.now();
+  return true;
+}
+
+function pauseForHold(released) {
+  transport.pause();
+  state.holdPaused = true;
+  dbg('HOLD released early', released.map(h => `${noteName(h)} ${(h.end - transport.now()).toFixed(2)} beats left`));
+  showHoldMessage(released);
+}
+
+function resumeFromHold() {
+  state.holdPaused = false;
+  transport.start();
+  state.scheduledUpTo = transport.now();
+  dbg('HOLD resumed at beat', +transport.now().toFixed(2));
+  $('targetMain').className = 'target-main';
+  updateFrame(true);
+}
+
+function showHoldMessage(released) {
+  keyboard.setTargets(released.map(h => ({ p: h.note.p, finger: h.note.f, color: h.part.color })));
+  const main = $('targetMain');
+  main.className = 'target-main bad';
+  main.innerHTML = 'Keep holding: ' + released.map(h => `<span class="note">${noteName(h)}</span>${h.note.f ? `<span class="finger">${h.note.f}</span>` : ''}`).join(' + ');
+  $('targetSub').textContent = released.map(h => `${noteName(h)} is a ${durationName(h.note.d)} — you let go ${(h.end - transport.now()).toFixed(1)} beats early. Press it again and hold it to the end of the note.`).join('  |  ');
+}
+
+function refreshTargetPanel() {
+  if (state.waiting && state.waitGroup) showTargets(state.waitGroup.items);
+  else if (state.holdPaused) { const hk = heldKeys(); showHoldMessage(state.holds.filter(h => !hk.has(h.key))); }
+}
+
+function durationName(d) {
+  const bl = barLen();
+  if (d >= bl && bl === 3) return 'dotted half note';
+  const names = { 4: 'whole note', 3: 'dotted half note', 2: 'half note', 1.5: 'dotted quarter note', 1: 'quarter note', 0.75: 'dotted eighth', 0.5: 'eighth note', 0.25: 'sixteenth note' };
+  return names[d] || `${d}-beat note`;
 }
 
 function pitchKey(p) { return state.anyOctave ? `c${p % 12}` : `p${p}`; }
@@ -532,14 +588,21 @@ function updateFrame(force) {
     if (!isShown && !isMe && !audible) continue;
     for (const n of notesActive(p, now)) {
       if (isShown) newCur.add(`${p.id}:${n.i}`);
-      if ((isMe || audible) && state.playing && !state.waiting) liveTargets.push({ p: n.p, finger: n.f, color: p.color });
+      if ((isMe || audible) && state.playing && !state.waiting && !state.holdPaused) liveTargets.push({ p: n.p, finger: n.f, color: p.color });
     }
   }
   for (const k of state.curKeys) if (!newCur.has(k)) { const [pid, i] = k.split(':'); score.setClass(pid, +i, 'cur', false); }
   for (const k of newCur) if (!state.curKeys.has(k)) { const [pid, i] = k.split(':'); score.setClass(pid, +i, 'cur', true); }
   state.curKeys = newCur;
-  if (state.playing && !state.waiting) {
+  if (state.playing && !state.waiting && !state.holdPaused) {
     keyboard.setTargets(liveTargets);
+    const mainEl = $('targetMain');
+    if (state.mode === 'learn' && state.holds.length && !mainEl.classList.contains('good') && !mainEl.classList.contains('bad')) {
+      mainEl.innerHTML = 'Hold: ' + state.holds.map(h => `<span class="note">${noteName(h)}</span>`).join(' + ');
+      $('targetSub').textContent = state.holds.map(h => `${noteName(h)}: ${durationName(h.note.d)}, ${Math.max(0, h.end - now).toFixed(1)} beats to go`).join('  |  ');
+    } else if (state.mode === 'learn' && !state.holds.length && !mainEl.classList.contains('good') && !mainEl.classList.contains('bad') && /^Hold:/.test(mainEl.textContent)) {
+      mainEl.textContent = 'Good — next note coming up…'; $('targetSub').textContent = '';
+    }
     if (state.mode !== 'learn') {
       const main = $('targetMain');
       if (!main.classList.contains('bad') && !main.classList.contains('good')) {
@@ -566,6 +629,7 @@ function notesActive(part, now) {
 
 // ---------- user notes ----------
 function userNoteOn(pitch, velocity) {
+  state.held.add(pitch);
   keyboard.press(pitch);
   dbg('noteOn', pitch, state.song ? spellPitch(pitch, state.song.key).name : '', 'vel', velocity, { mode: state.mode, playing: state.playing, waiting: state.waiting, beat: +transport.now().toFixed(2), instr: userInstrument() });
   if (!state.song) { engine.noteOn(userInstrument(), pitch, velocity, 'user'); return; }
@@ -573,32 +637,34 @@ function userNoteOn(pitch, velocity) {
   if (!state.playing || state.mode === 'listen') { engine.noteOn(instr, pitch, velocity, 'user'); return; }
   const key = pitchKey(pitch);
   if (state.mode === 'learn') {
+    const upcoming = state.groups[state.groupIdx];
+    const inGroup = g => g && g.items.some(it => pitchKey(it.note.p) === key);
     if (state.waiting) {
-      const it = state.pending.get(key);
-      if (it) {
-        state.pending.delete(key);
+      if (inGroup(state.waitGroup)) {
         engine.noteOn(instr, pitch, velocity, 'user');
-        dbg('  -> HIT (waiting)', `${it.part.id}#${it.note.i}`, 'remaining', state.pending.size - 1);
-        markHit(it.part, it.note);
-        flashMain('good', `${spellPitch(it.note.p, state.song.key).name} ✓`);
-        if (!state.pending.size) advanceGroup();
-        else showTargets([...state.pending.values()]);
+        if (!checkWaitSatisfied()) { dbg('  -> part of the chord, waiting for the rest'); showTargets(state.waitGroup.items); }
         return;
       }
-    } else {
-      // early press: accept notes of the upcoming group if it is less than a beat away
-      const g = state.groups[state.groupIdx];
-      if (g && g.t - transport.now() < 1) {
-        const it = g.items.find(x => pitchKey(x.note.p) === key && !state.earlyHits.has(`${x.part.id}:${x.note.i}`));
-        if (it) { dbg('  -> EARLY HIT', `${it.part.id}#${it.note.i}`, 'ahead by', +(g.t - transport.now()).toFixed(2)); state.earlyHits.add(`${it.part.id}:${it.note.i}`); engine.noteOn(instr, pitch, velocity, 'user'); return; }
+    } else if (state.holdPaused) {
+      if (state.holds.some(h => h.key === key)) {
+        engine.noteOn(instr, pitch, velocity, 'user');
+        const hk = heldKeys();
+        if (state.holds.every(h => hk.has(h.key))) resumeFromHold();
+        else showHoldMessage(state.holds.filter(h => !hk.has(h.key)));
+        return;
       }
+    } else if (state.holds.some(h => h.key === key) || (upcoming && upcoming.t - transport.now() < 1 && inGroup(upcoming))) {
+      // re-pressing a held note, or pressing the next note a little early: sound it, judged when its time comes
+      engine.noteOn(instr, pitch, velocity, 'user');
+      return;
     }
     // wrong note: silent
-    dbg('  -> WRONG (silent)', { want: [...state.pending.keys()] });
+    const wantItems = state.waiting ? state.waitGroup.items : state.holdPaused ? state.holds : [];
+    dbg('  -> WRONG (silent)', { want: wantItems.map(noteName) });
     state.wrong++;
     keyboard.markWrong(pitch);
-    const want = state.waiting ? [...state.pending.values()].map(x => spellPitch(x.note.p, state.song.key).name).join(' + ') : '';
-    flashMain('bad', `${spellPitch(pitch, state.song.key).name} is not it${want ? ` — you want ${want}` : ''}`);
+    const want = wantItems.map(noteName).join(' + ');
+    flashMain('bad', `${spellPitch(pitch, state.song.key).name} is not it${want ? ` — you want ${want}${state.waiting && wantItems.length > 1 ? ' together' : ''}` : ''}`);
     updateScoreLine();
     return;
   }
@@ -634,6 +700,7 @@ function notesNear(part, now, w) {
   return out;
 }
 function userNoteOff(pitch) {
+  state.held.delete(pitch);
   dbg('noteOff', pitch, { sustain: state.sustain });
   keyboard.release(pitch);
   if (state.sustain) { state.sustained.add(pitch); return; }
@@ -648,7 +715,7 @@ function flashMain(cls, text) {
   clearTimeout(flashTimer);
   flashTimer = setTimeout(() => {
     main.className = 'target-main';
-    if (state.waiting) showTargets([...state.pending.values()]);
+    if (state.waiting || state.holdPaused) refreshTargetPanel();
     else if (cls === 'bad') { main.innerHTML = prevHTML; $('targetSub').textContent = prevSub; }
   }, cls === 'good' ? 350 : 900);
 }
