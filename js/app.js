@@ -65,6 +65,7 @@ const state = {
   playing: false,
   waiting: false,
   held: new Set(),      // pitches physically down right now
+  used: new Set(),      // held pitches already spent on an earlier note: a repeated note needs a fresh press
   waitGroup: null,      // learn mode: the chord/note we are waiting for
   holds: [],            // learn mode: notes that must stay down until their written end
   holdPaused: false,    // learn mode: a held note was released early, waiting for it again
@@ -296,6 +297,7 @@ function play() {
   rebuildGroups();
   state.scheduledUpTo = transport.now();
   state.waiting = false;
+  spendHeld();
   transport.start();
   dbg('play', { mode: state.mode, beat: +transport.now().toFixed(2), spb: +transport.spb.toFixed(4), me: meParts().map(p => p.id), back: backParts().map(p => p.id), groups: state.groups.length, groupIdx: state.groupIdx, loop: state.loop, audio: engine.ctx?.state });
   $('btnPlay').textContent = '⏸ Pause';
@@ -434,6 +436,9 @@ function click(when, accent) {
 const HOLD_MIN_BEATS = 1;                       // notes shorter than a quarter pass on press
 function holdTolerance(d) { return Math.max(0.1, d * 0.12); } // may let go slightly before the end
 function heldKeys() { const k = new Set(); for (const p of state.held) k.add(pitchKey(p)); return k; }
+// keys that are down AND were pressed since the last note passed (a key still held from the previous note does not count again)
+function freshKeys() { const k = new Set(); for (const p of state.held) if (!state.used.has(p)) k.add(pitchKey(p)); return k; }
+function spendHeld() { for (const p of state.held) state.used.add(p); }
 function noteName(it) { return spellPitch(it.note.p, state.song.key).name; }
 
 function enterWait(group) {
@@ -449,8 +454,9 @@ function enterWait(group) {
 function checkWaitSatisfied() {
   const g = state.waitGroup;
   if (!g) return false;
-  const hk = heldKeys();
+  const hk = freshKeys();
   if (g.items.some(it => !hk.has(pitchKey(it.note.p)))) return false;
+  spendHeld(); // the same key must be struck again for the next note, even if it is the same pitch
   for (const it of g.items) {
     markHit(it.part, it.note);
     if (it.note.d >= HOLD_MIN_BEATS) state.holds.push({ part: it.part, note: it.note, key: pitchKey(it.note.p), end: it.note.t + it.note.d });
@@ -474,6 +480,7 @@ function pauseForHold(released) {
 
 function resumeFromHold() {
   state.holdPaused = false;
+  spendHeld();
   transport.start();
   state.scheduledUpTo = transport.now();
   dbg('HOLD resumed at beat', +transport.now().toFixed(2));
@@ -631,6 +638,7 @@ function notesActive(part, now) {
 // ---------- user notes ----------
 function userNoteOn(pitch, velocity) {
   state.held.add(pitch);
+  state.used.delete(pitch);
   keyboard.press(pitch);
   dbg('noteOn', pitch, state.song ? spellPitch(pitch, state.song.key).name : '', 'vel', velocity, { mode: state.mode, playing: state.playing, waiting: state.waiting, beat: +transport.now().toFixed(2), instr: userInstrument() });
   if (!state.song) { engine.noteOn(userInstrument(), pitch, velocity, 'user'); return; }
@@ -657,6 +665,8 @@ function userNoteOn(pitch, velocity) {
     } else if (state.holds.some(h => h.key === key) || (upcoming && upcoming.t - transport.now() < 1 && inGroup(upcoming))) {
       // re-pressing a held note, or pressing the next note a little early: sound it, judged when its time comes
       engine.noteOn(instr, pitch, velocity, 'user');
+      const early = upcoming && upcoming.t - transport.now() < 1 && inGroup(upcoming);
+      if (!early) state.used.add(pitch); // a re-press of the note being held does not pre-pay the next note
       return;
     }
     // wrong note: silent
@@ -702,6 +712,7 @@ function notesNear(part, now, w) {
 }
 function userNoteOff(pitch) {
   state.held.delete(pitch);
+  state.used.delete(pitch);
   dbg('noteOff', pitch, { sustain: state.sustain });
   keyboard.release(pitch);
   if (state.sustain) { state.sustained.add(pitch); return; }
