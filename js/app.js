@@ -248,7 +248,8 @@ function skipNote(p, n, parts) { return !!n.alt && parts.some(q => q.doubles ===
 // ---------- score ----------
 function shownPartIds() {
   const me = meParts().map(p => p.id);
-  const back = backParts().filter(p => !p.perc).map(p => p.id);
+  // backing parts that merely double another part (same line an octave up) are left out of the score
+  const back = backParts().filter(p => !p.perc && !p.doubles).map(p => p.id);
   if (!me.length) return back;
   return state.showBacking ? [...me, ...back] : me;
 }
@@ -258,7 +259,7 @@ function renderScore() {
   clearTimeout(renderTimer);
   renderTimer = setTimeout(() => {
     score.render(state.song, {
-      parts: shownPartIds(), fingerParts: state.showFingers ? new Set(meParts().map(p => p.id).concat(shownPartIds())) : new Set(),
+      parts: shownPartIds(), fingerParts: state.showFingers ? new Set(meParts().length ? meParts().map(p => p.id) : shownPartIds()) : new Set(),
       barsPerLine: state.barsPerLine, zoom: state.zoom,
     });
     state.curKeys.clear();
