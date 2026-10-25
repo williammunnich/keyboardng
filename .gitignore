@@ -2,3 +2,5 @@ node_modules/
 .DS_Store
 # Third-party MIDI transcriptions are fetched, not committed (see README)
 songs/reference/*.mid
+# Instagram video source and renders (not for the repo)
+insta-vid/
