@@ -1,0 +1,4 @@
+node_modules/
+.DS_Store
+# Third-party MIDI transcriptions are fetched, not committed (see README)
+songs/reference/*.mid

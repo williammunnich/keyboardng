@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Piano Trainer</title>
+<link rel="stylesheet" href="css/app.css">
+<script src="https://cdn.jsdelivr.net/npm/vexflow@4.2.3/build/cjs/vexflow.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tonejs/midi@2.0.28/build/Midi.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">🎹 Piano Trainer</div>
+  <label>Song
+    <select id="songSelect"></select>
+  </label>
+  <label class="filebtn">Load MIDI… <input type="file" id="midiFile" accept=".mid,.midi,audio/midi"></label>
+  <label>MIDI in
+    <select id="midiDevice"></select>
+  </label>
+  <button id="midiConnect" class="hidden" title="Ask Chrome for MIDI access again">Connect MIDI</button>
+  <span id="status" class="status"></span>
+</header>
+
+<section class="controls">
+  <div class="modes" role="radiogroup" aria-label="Mode">
+    <label class="mode"><input type="radio" name="mode" value="learn" checked> <span><b>Beginner</b><small>waits for the right key · wrong keys are silent</small></span></label>
+    <label class="mode"><input type="radio" name="mode" value="play"> <span><b>Play along</b><small>backing plays in time · you get scored</small></span></label>
+    <label class="mode"><input type="radio" name="mode" value="listen"> <span><b>Listen</b><small>hear every part, follow the score</small></span></label>
+  </div>
+  <div class="transport">
+    <button id="btnRewind" title="Back to start (Home)">⏮</button>
+    <button id="btnPlay" class="primary" title="Play / pause (Space)">▶ Play</button>
+    <button id="btnStop" title="Stop">⏹</button>
+    <label class="tempo">Tempo <input type="range" id="tempo" min="25" max="125" value="60"> <span id="tempoVal">60%</span> <span id="bpmVal" class="muted"></span></label>
+    <label class="loop"><input type="checkbox" id="loopOn"> Loop bars <input type="number" id="loopA" min="1" value="9" style="width:4em"> – <input type="number" id="loopB" min="1" value="23" style="width:4em"></label>
+    <span id="position" class="muted">bar 1</span>
+  </div>
+</section>
+
+<main class="main">
+  <aside class="side">
+    <h3>Parts <small class="muted">who plays what</small></h3>
+    <div id="parts"></div>
+    <h3>Score</h3>
+    <div class="opts">
+      <label><input type="checkbox" id="showBacking"> Show backing parts too (as extra voices)</label>
+      <label><input type="checkbox" id="showFingers" checked> Fingering numbers</label>
+      <label>Zoom <input type="range" id="zoom" min="60" max="140" value="100"></label>
+      <label>Bars per line <select id="barsPerLine"><option>2</option><option selected>4</option><option>6</option><option>8</option></select></label>
+    </div>
+    <h3>Keyboard</h3>
+    <div class="opts">
+      <label>My keyboard <select id="kbRange">
+        <option value="36-84">49 keys (C2–C6, KeyStudio)</option>
+        <option value="36-96">61 keys (C2–C7)</option>
+        <option value="21-108">88 keys (A0–C8)</option>
+        <option value="48-84">37 keys (C3–C6)</option>
+      </select></label>
+      <label><input type="checkbox" id="anyOctave"> Accept the right note in any octave</label>
+      <label><input type="checkbox" id="showNames" checked> Note names on keys</label>
+      <label>My sound <select id="mySound"><option value="part">Part's instrument</option><option value="acoustic_grand_piano">Piano</option><option value="electric_piano_1">Electric piano</option></select></label>
+      <label><input type="checkbox" id="muteWrong"> Play-along: silence wrong notes</label>
+      <label><input type="checkbox" id="metronome"> Metronome click</label>
+    </div>
+    <h3>Debug</h3>
+    <div class="opts">
+      <label><input type="checkbox" id="debugOn"> Debug log (MIDI bytes, notes, scheduler)</label>
+    </div>
+    <details class="help">
+      <summary>Help & keys</summary>
+      <p><b>Space</b> play/pause · <b>Home</b> rewind · <b>←/→</b> previous/next bar · <b>Esc</b> stop.</p>
+      <p>No MIDI keyboard? Use the computer keyboard: <kbd>A S D F G H J K</kbd> are white keys from C, <kbd>W E T Y U</kbd> black keys, <kbd>Z</kbd>/<kbd>X</kbd> change octave. You can also click the on-screen keys.</p>
+      <p>Each part can be set to <b>Me</b> (you play it, it is silent in the backing), <b>Backing</b> (the app plays it) or <b>Off</b>.</p>
+    </details>
+    <p class="credit" id="credit"></p>
+  </aside>
+
+  <section class="score-wrap" id="scoreWrap">
+    <div id="score" class="score"></div>
+  </section>
+</main>
+
+<footer class="bottom">
+  <div class="target" id="target">
+    <div class="target-main" id="targetMain">Press ▶ Play to start.</div>
+    <div class="target-sub" id="targetSub"></div>
+    <div class="target-score" id="scoreLine"></div>
+  </div>
+  <div id="keyboard" class="keyboard"></div>
+</footer>
+
+<div id="debugPanel" class="debug hidden">
+  <div class="debug-bar" id="debugBar" title="Drag to move"><b>Debug log</b> <span class="muted">drag to move · also in the console as [trainer]</span> <button id="debugCopy">Copy</button> <button id="debugClear">Clear</button> <button id="debugMin" title="Minimize / restore">▾</button> <button id="debugClose" title="Hide (turn off in the sidebar)">✕</button></div>
+  <pre id="debugLog"></pre>
+</div>
+
+<div id="overlay" class="overlay hidden"><div class="card">
+  <h2>Click to start the audio</h2>
+  <p>Browsers only allow sound after a click. Your MIDI keyboard will be connected too.</p>
+  <button id="overlayBtn" class="primary big">Start</button>
+</div></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

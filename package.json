@@ -1,0 +1,18 @@
+{
+  "name": "keyboardng",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser piano trainer for a USB MIDI keyboard: live sheet music with fingering, backing parts, and a beginner mode that waits for the right key.",
+  "license": "MIT",
+  "author": "William Munnich",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/williammunnich/keyboardng.git"
+  },
+  "scripts": {
+    "start": "node serve.mjs",
+    "fetch-reference": "node tools/fetch-reference.mjs",
+    "build-song": "node tools/build-song.mjs"
+  }
+}
